@@ -45,8 +45,9 @@
     </div>
     <div id="root"></div>
     <script type="module">
-      // 비밀번호로 키를 만들어 sealed.json 을 푼다. 맞으면 키를 이 브라우저에 기억해 다음엔 바로 연다.
+      // 비밀번호로 키를 만들어 sealed.json 을 푼다. 맞으면 키를 이 브라우저에 7일 기억해 그동안은 바로 연다.
       const KEY = "ta-key";
+      const KEEP = 7 * 24 * 60 * 60 * 1000;
       const $ = (s) => document.querySelector(s);
       const u8 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
       const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
@@ -76,10 +77,11 @@
         );
       }
 
-      // 기억해 둔 키로 먼저 (다시 빌드하면 소금이 바뀌므로 소금도 함께 맞춘다)
+      // 기억해 둔 키로 먼저 — 7일이 지났으면 지우고 다시 묻는다(소금이 바뀌었을 때도 다시 묻는다)
       try {
         const saved = JSON.parse(localStorage.getItem(KEY) || "null");
-        if (saved && saved.salt === sealed.salt) {
+        if (saved && !(Date.now() - (saved.t || 0) < KEEP)) localStorage.removeItem(KEY);
+        else if (saved && saved.salt === sealed.salt) {
           const key = await crypto.subtle.importKey("raw", u8(saved.k), "AES-GCM", false, ["decrypt"]);
           await open(key);
         }
@@ -98,7 +100,7 @@
             const key = await derive(input.value);
             await open(key);
             try {
-              localStorage.setItem(KEY, JSON.stringify({ salt: sealed.salt, k: b64(await crypto.subtle.exportKey("raw", key)) }));
+              localStorage.setItem(KEY, JSON.stringify({ salt: sealed.salt, t: Date.now(), k: b64(await crypto.subtle.exportKey("raw", key)) }));
             } catch {}
           } catch {
             $("#gate .err").textContent = "비밀번호가 다름";
