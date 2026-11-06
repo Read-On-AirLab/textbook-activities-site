@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>교재 활동 시안 · 에어리딩</title>
+    <style>
+      @font-face {
+        font-family: "Pretendard Variable";
+        font-weight: 45 920;
+        font-display: swap;
+        src: url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/packages/pretendard/dist/web/variable/woff2/PretendardVariable.woff2") format("woff2-variations");
+      }
+      html { background: #f5f5f7; color: #1d1d1f; font-family: "Pretendard Variable", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif; -webkit-font-smoothing: antialiased; }
+      body { margin: 0; }
+      #gate { min-height: 100dvh; display: flex; align-items: center; justify-content: center; padding: 0 16px; }
+      #gate form { width: 100%; max-width: 320px; background: #fff; border-radius: 10px; padding: 28px 24px 24px; box-sizing: border-box; }
+      #gate svg { height: 26px; width: auto; display: block; }
+      #gate h1 { font-size: 17px; line-height: 25px; font-weight: 700; margin: 18px 0 16px; letter-spacing: -0.01em; }
+      #gate input { width: 100%; box-sizing: border-box; height: 42px; border: 1px solid #d2d2d7; border-radius: 8px; padding: 0 12px; font: inherit; font-size: 15px; }
+      #gate input:focus { outline: 2px solid #5fc4a0; outline-offset: 1px; border-color: transparent; }
+      #gate button { margin-top: 10px; width: 100%; height: 42px; border: 0; border-radius: 8px; background: #03956e; color: #fff; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+      #gate button:disabled { opacity: 0.6; cursor: default; }
+      #gate .err { min-height: 20px; margin: 8px 0 0; font-size: 13px; color: #b22b32; }
+    </style>
+  </head>
+  <body>
+    <div id="gate" hidden>
+      <form>
+        <svg viewBox="-20 0 1122 957" fill="none" stroke="#03956E" stroke-linejoin="round" aria-label="에어리딩">
+          <path d="M82.2 685.4C72.3 702.6 67.5 723.6 67.5 751.3C67.5 840.9 140.8 889.3 228.8 889.3" stroke-width="104" />
+          <path d="M228.8 889.3H858.7" stroke-width="104" stroke-linecap="round" />
+          <path d="M860.5 618.9H226.3C143 618.9 69 569.6 69 479.9C69 390.2 137.2 342.5 227.9 342.5H666.3C821.3 342.5 969.3 175 1041.2 86.5" stroke-width="104" stroke-linecap="round" />
+          <path d="M865.8 58.7H1051.9A10.9 10.9 0 0 1 1062.8 69.6V257.6" stroke-width="86" stroke-linecap="round" />
+        </svg>
+        <h1>교재 활동 시안</h1>
+        <input type="password" autocomplete="current-password" placeholder="비밀번호" aria-label="비밀번호" required />
+        <button type="submit">열기</button>
+        <p class="err" role="alert"></p>
+      </form>
+    </div>
+    <div id="root"></div>
+    <script type="module">
+      // 비밀번호로 키를 만들어 sealed.json 을 푼다. 맞으면 키를 이 브라우저에 기억해 다음엔 바로 연다.
+      const KEY = "ta-key";
+      const $ = (s) => document.querySelector(s);
+      const u8 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+      const sealed = await fetch("./sealed.json", { cache: "no-cache" }).then((r) => r.json());
+
+      async function open(key) {
+        const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: u8(sealed.iv) }, key, u8(sealed.data));
+        const { js, css } = JSON.parse(new TextDecoder().decode(plain));
+        const style = document.createElement("style");
+        style.textContent = css;
+        document.head.appendChild(style);
+        $("#gate").remove();
+        const s = document.createElement("script");
+        s.type = "module";
+        s.src = URL.createObjectURL(new Blob([js], { type: "text/javascript" }));
+        document.body.appendChild(s);
+      }
+
+      async function derive(password) {
+        const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+        return crypto.subtle.deriveKey(
+          { name: "PBKDF2", salt: u8(sealed.salt), iterations: sealed.iter, hash: "SHA-256" },
+          base,
+          { name: "AES-GCM", length: 256 },
+          true,
+          ["decrypt"],
+        );
+      }
+
+      // 기억해 둔 키로 먼저 (다시 빌드하면 소금이 바뀌므로 소금도 함께 맞춘다)
+      try {
+        const saved = JSON.parse(localStorage.getItem(KEY) || "null");
+        if (saved && saved.salt === sealed.salt) {
+          const key = await crypto.subtle.importKey("raw", u8(saved.k), "AES-GCM", false, ["decrypt"]);
+          await open(key);
+        }
+      } catch {}
+
+      if (document.getElementById("gate")) {
+        $("#gate").hidden = false;
+        const input = $("#gate input");
+        const btn = $("#gate button");
+        input.focus();
+        $("#gate form").addEventListener("submit", async (e) => {
+          e.preventDefault();
+          btn.disabled = true;
+          $("#gate .err").textContent = "";
+          try {
+            const key = await derive(input.value);
+            await open(key);
+            try {
+              localStorage.setItem(KEY, JSON.stringify({ salt: sealed.salt, k: b64(await crypto.subtle.exportKey("raw", key)) }));
+            } catch {}
+          } catch {
+            $("#gate .err").textContent = "비밀번호가 다름";
+            btn.disabled = false;
+            input.select();
+          }
+        });
+      }
+    </script>
+  </body>
+</html>
