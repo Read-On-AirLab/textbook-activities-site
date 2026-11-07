@@ -46,16 +46,16 @@
     <div id="root"></div>
     <script type="module">
       // 비밀번호로 키를 만들어 sealed.json 을 푼다. 맞으면 키를 이 브라우저에 7일 기억해 그동안은 바로 연다.
+      // 기종 틀 안(iframe ?frame=1)은 시안·콘텐츠를 바꿀 때마다 이 페이지를 새로 연다 — 바깥 창이 이미 푼 앱을 그대로 받아
+      // 비밀번호를 다시 묻지 않는다(저장소가 차서 키를 못 적은 브라우저에서도). 다시 풀지 않으니 바꿀 때도 빠르다.
       const KEY = "ta-key";
       const KEEP = 7 * 24 * 60 * 60 * 1000;
       const $ = (s) => document.querySelector(s);
       const u8 = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
       const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
-      const sealed = await fetch("./sealed.json", { cache: "no-cache" }).then((r) => r.json());
 
-      async function open(key) {
-        const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: u8(sealed.iv) }, key, u8(sealed.data));
-        const { js, css } = JSON.parse(new TextDecoder().decode(plain));
+      function start({ js, css }) {
+        window.__taApp = { js, css };
         const style = document.createElement("style");
         style.textContent = css;
         document.head.appendChild(style);
@@ -65,6 +65,37 @@
         s.src = URL.createObjectURL(new Blob([js], { type: "text/javascript" }));
         document.body.appendChild(s);
       }
+
+      let fromParent = null;
+      try {
+        if (window.parent !== window) fromParent = window.parent.__taApp || null;
+      } catch {}
+
+      const sealed = fromParent ? null : await fetch("./sealed.json", { cache: "no-cache" }).then((r) => r.json());
+
+      async function open(key) {
+        const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: u8(sealed.iv) }, key, u8(sealed.data));
+        start(JSON.parse(new TextDecoder().decode(plain)));
+      }
+
+      // 키 기억 — localStorage 가 학생 작업(그림·사진)으로 차서 못 적으면 이 탭(sessionStorage)에라도
+      const recall = () => {
+        for (const st of [localStorage, sessionStorage]) {
+          try {
+            const v = JSON.parse(st.getItem(KEY) || "null");
+            if (v) return { st, v };
+          } catch {}
+        }
+        return null;
+      };
+      const remember = (v) => {
+        for (const st of [localStorage, sessionStorage]) {
+          try {
+            st.setItem(KEY, JSON.stringify(v));
+            return;
+          } catch {}
+        }
+      };
 
       async function derive(password) {
         const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
@@ -78,14 +109,17 @@
       }
 
       // 기억해 둔 키로 먼저 — 7일이 지났으면 지우고 다시 묻는다(소금이 바뀌었을 때도 다시 묻는다)
-      try {
-        const saved = JSON.parse(localStorage.getItem(KEY) || "null");
-        if (saved && !(Date.now() - (saved.t || 0) < KEEP)) localStorage.removeItem(KEY);
-        else if (saved && saved.salt === sealed.salt) {
-          const key = await crypto.subtle.importKey("raw", u8(saved.k), "AES-GCM", false, ["decrypt"]);
-          await open(key);
-        }
-      } catch {}
+      if (fromParent) start(fromParent);
+      else
+        try {
+          const got = recall();
+          const saved = got?.v;
+          if (saved && !(Date.now() - (saved.t || 0) < KEEP)) got.st.removeItem(KEY);
+          else if (saved && saved.salt === sealed.salt) {
+            const key = await crypto.subtle.importKey("raw", u8(saved.k), "AES-GCM", false, ["decrypt"]);
+            await open(key);
+          }
+        } catch {}
 
       if (document.getElementById("gate")) {
         $("#gate").hidden = false;
@@ -99,9 +133,7 @@
           try {
             const key = await derive(input.value);
             await open(key);
-            try {
-              localStorage.setItem(KEY, JSON.stringify({ salt: sealed.salt, t: Date.now(), k: b64(await crypto.subtle.exportKey("raw", key)) }));
-            } catch {}
+            remember({ salt: sealed.salt, t: Date.now(), k: b64(await crypto.subtle.exportKey("raw", key)) });
           } catch {
             $("#gate .err").textContent = "비밀번호가 다름";
             btn.disabled = false;
